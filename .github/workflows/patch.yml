@@ -386,6 +386,17 @@ jobs:
 
           if [ "${{ steps.check-release.outputs.release_exists }}" = "true" ]; then
             echo "⬆️ Uploading rebuilt assets in place and refreshing release metadata..."
+            
+            # Delete old APK versions that are being replaced
+            for apk in "${ASSETS[@]}"; do
+              if [[ "$apk" == *.apk ]]; then
+                filename=$(basename "$apk")
+                echo "🗑️ Deleting old version of $filename from latest release..."
+                gh release delete latest "$filename" --yes || true
+              fi
+            done
+            
+            # Upload new APKs and manifest
             gh release upload latest "${ASSETS[@]}" --clobber
             gh release edit latest \
               --title "ReVanced APKs - $(date +'%Y-%m-%d %H:%M')" \
