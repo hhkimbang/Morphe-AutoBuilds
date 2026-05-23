@@ -1,0 +1,10 @@
+[
+    {
+        "name": "paresh"
+    },
+    {
+        "provider": "gitlab",
+        "project": "Paresh-Maheshwari/paresh-patches",
+        "tag": "latest"
+    }
+]
