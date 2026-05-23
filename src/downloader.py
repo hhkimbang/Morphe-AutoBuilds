@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from pathlib import Path
 from src import (
     utils,
@@ -165,10 +166,18 @@ def download_uptodown(app_name: str, cli: str, patches: str, arch: str = None) -
     return download_platform(app_name, "uptodown", cli, patches, arch)
 
 def download_apkeditor() -> Path:
-    release = utils.detect_github_release("REAndroid", "APKEditor", "latest")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            release = utils.detect_github_release("REAndroid", "APKEditor", "latest")
 
-    for asset in release["assets"]:
-        if asset["name"].startswith("APKEditor") and asset["name"].endswith(".jar"):
-            return download_resource(asset["browser_download_url"])
+            for asset in release["assets"]:
+                if asset["name"].startswith("APKEditor") and asset["name"].endswith(".jar"):
+                    return download_resource(asset["browser_download_url"])
 
-    raise RuntimeError("APKEditor .jar file not found in the latest release")
+            raise RuntimeError("APKEditor .jar file not found in the latest release")
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise RuntimeError(f"Failed to download APKEditor after {max_retries} attempts: {e}")
+            logging.warning(f"APKEditor download attempt {attempt + 1} failed: {e}. Retrying...")
+            time.sleep(2)  # Wait 2 seconds before retry
