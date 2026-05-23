@@ -322,13 +322,27 @@ def _is_unreliable_source_sig(sig: str) -> bool:
     )
 
 
+def _recover_apk_from_release(app: str, arch: str, existing_apks: List[str]) -> str:
+    a = (app or "").lower()
+    rarch = (arch or "").lower()
+    candidates: List[str] = []
+    for n in existing_apks:
+        nl = (n or "").lower()
+        if not nl.endswith(".apk"):
+            continue
+        if not nl.startswith(f"{a}-{rarch}-"):
+            continue
+        candidates.append(n)
+    candidates.sort()
+    return candidates[-1] if candidates else ""
+
+
+
 
 def plan_incremental(full_matrix: List[dict], old_manifest: Optional[dict],
                      existing_apks: List[str]) -> Tuple[List[dict], List[str], dict]:
     """Decide which entries need rebuilding.
     Returns (build_matrix, carry_over_apks, new_manifest_entries)."""
-    old_entries = (old_manifest or {}).get("entries", {}) if isinstance(old_manifest, dict) else {}
-    existing_apk_set = set(existing_apks)
 
     build_matrix: List[dict] = []
     carry_over: List[str] = []
@@ -346,6 +360,12 @@ def plan_incremental(full_matrix: List[dict], old_manifest: Optional[dict],
         old_src_sig = (old or {}).get("source_sig", "")
         if old and old_src_sig and _is_unreliable_source_sig(cur_src_sig):
             cur_src_sig = old_src_sig
+        carried_apk = (old or {}).get("apk", "")
+        if old:
+            if not carried_apk or carried_apk not in existing_apk_set:
+                recovered = _recover_apk_from_release(app, arch, existing_apks)
+                if recovered:
+                    carried_apk = recovered
 
         new_entries[mkey] = {
             "app_name": app,
@@ -355,7 +375,7 @@ def plan_incremental(full_matrix: List[dict], old_manifest: Optional[dict],
             "source_sig": cur_src_sig,
             # apk filename is filled in *after* build by the workflow; for now
             # carry over whatever the old manifest had so we know what to keep.
-            "apk": (old_entries.get(mkey) or {}).get("apk", ""),
+            "apk": carried_apk,
         }
 
         reasons: List[str] = []
@@ -368,7 +388,7 @@ def plan_incremental(full_matrix: List[dict], old_manifest: Optional[dict],
                 reasons.append(f"app-version: {old.get('config_version','')!r}->{cur_app_ver!r}")
             if old.get("source_sig", "") != cur_src_sig:
                 reasons.append("patch-source-updated")
-            old_apk = old.get("apk", "")
+            old_apk = carried_apk
             if old_apk and old_apk not in existing_apk_set:
                 reasons.append("apk-missing-from-release")
             if not old_apk:
