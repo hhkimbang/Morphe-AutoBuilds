@@ -110,7 +110,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
     candidates: list[str] = []
     used_method = None
     for method in download_methods:
-        input_apk, version, candidates = method(app_name, str(cli), str(patches), arch)
+        input_apk, version, candidates = method(app_name, str(cli), str(patches), "universal")
         if input_apk:
             used_method = method
             break
