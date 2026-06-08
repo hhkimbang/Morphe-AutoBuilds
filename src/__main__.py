@@ -110,7 +110,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
     candidates: list[str] = []
     used_method = None
     for method in download_methods:
-        input_apk, version, candidates = method(app_name, str(cli), str(patches), "universal")
+        input_apk, version, candidates = method(app_name, str(cli), str(patches), arch)
         if input_apk:
             used_method = method
             break
@@ -202,7 +202,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         else:
             utils.run_process([
                 "zip", "--delete", str(input_apk),
-                "lib/x86/*", "lib/x86_64/*"
+                "lib/x86/*", "lib/x86_64/*", "lib/armeabi-v7a/*"
             ], silent=True, check=False)
 
         # FIX: Repair corrupted APK from Uptodown

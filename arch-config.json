@@ -22,10 +22,7 @@
   },
   {
     "app_name": "reddit",
-    "source": "morphe",
-    "arches": [
-      "arm64-v8a"
-    ]
+    "source": "morphe"
   },
   {
     "app_name": "instagram",
