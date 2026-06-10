@@ -168,6 +168,8 @@ def download_platform(
                 continue
             download_link = platform_module.get_download_link(version, app_name, config)
             if not download_link:
+                download_link = platform_module.get_download_link(version, app_name, config, 'universal')
+            if not download_link:
                 last_error = ValueError(f"No download link found for {app_name} version {version}")
                 continue
             try:
