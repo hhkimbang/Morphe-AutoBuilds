@@ -1,1 +1,9 @@
-[]
+[
+  {
+    "app_name": "youtube-music",
+    "source": "morphe",
+    "arches": [
+      "arm64-v8a"
+    ]
+  }
+]
