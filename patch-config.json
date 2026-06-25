@@ -94,7 +94,8 @@
     { "app_name": "ibs_paint", "source": "Hoo" },
     { "app_name": "pokecardex", "source": "almewty" },
     { "app_name": "gamehub", "source": "liaralabs" },
-    { "app_name": "dialer", "source": "taknok" }
+    { "app_name": "dialer", "source": "taknok" },
+    { "app_name": "windscribe", "source": "rushiranpise-dev" }
     
   ]
 }
