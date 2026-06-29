@@ -831,7 +831,8 @@ def plan_incremental(full_matrix: List[dict], old_manifest: Optional[dict],
             "source": src,
             "arch": arch,
             "config_version": cur_app_ver,
-            "source_sig": cur_src_sig,
+            # source_sig is set below AFTER the rebuild decision.
+            "source_sig": "",
             # apk filename is filled in *after* build by the workflow; for now
             # carry over whatever the old manifest had so we know what to keep.
             "apk": carried_apk,
@@ -893,7 +894,17 @@ def plan_incremental(full_matrix: List[dict], old_manifest: Optional[dict],
         if reasons:
             logging.info(f"  REBUILD {app}/{src}/{arch}: {'; '.join(reasons)}")
             build_matrix.append(entry)
+            # IMPORTANT: for rebuild entries, keep the OLD source_sig in the
+            # manifest. Store the current (new) sig in 'pending_source_sig'.
+            # merge_manifest.py will promote it to 'source_sig' only after a
+            # successful build writes a build record. This prevents a failed
+            # build from "consuming" the signature change: if the build fails
+            # the next planner run will still see old_sig != cur_sig and retry.
+            new_entries[mkey]["source_sig"] = old_src_sig
+            new_entries[mkey]["pending_source_sig"] = cur_src_sig
         else:
+            # Carry-over: nothing changed, safe to write the current signature.
+            new_entries[mkey]["source_sig"] = cur_src_sig
             old_apk = carried_apk
             if old_apk and old_apk in existing_apk_set:
                 carry_over.append(old_apk)
@@ -902,6 +913,8 @@ def plan_incremental(full_matrix: List[dict], old_manifest: Optional[dict],
                 # Defensive: if we can't carry it, we must rebuild.
                 logging.info(f"  REBUILD {app}/{src}/{arch}: no carry-over apk")
                 build_matrix.append(entry)
+                new_entries[mkey]["source_sig"] = old_src_sig
+                new_entries[mkey]["pending_source_sig"] = cur_src_sig
 
     # The build job in src/__main__.py builds ALL arches for an (app, source) in
     # one matrix run (it iterates arches from arch-config.json itself). To avoid

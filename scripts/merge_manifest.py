@@ -61,7 +61,21 @@ def main() -> int:
                 entry["apk"] = apk
             if resolved_version:
                 entry["built_version"] = resolved_version
+            # Promote pending_source_sig -> source_sig now that the build
+            # succeeded.  The planner deliberately keeps the OLD source_sig
+            # for rebuild entries so that a failed build doesn't "consume"
+            # the signature change.  Only a successful build (= this code
+            # path) finalises the new signature.
+            pending_sig = entry.get("pending_source_sig", "")
+            if pending_sig:
+                entry["source_sig"] = pending_sig
+                del entry["pending_source_sig"]
             print(f"  merged {key} -> apk={apk!r} built_version={resolved_version!r}")
+    # Clean up leftover pending_source_sig for entries whose build never
+    # completed (no build record).  The OLD source_sig stays in place so the
+    # next planner run will detect the difference and retry.
+    for entry in entries.values():
+        entry.pop("pending_source_sig", None)
 
     with open("manifest.json", "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
