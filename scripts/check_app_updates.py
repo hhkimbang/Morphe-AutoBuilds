@@ -177,6 +177,12 @@ from record_build import extract_version_from_filename
 
 _repo_sig_cache: Dict[Tuple[str, str, str, str], str] = {}
 
+# Cached raw release dicts keyed by (user, repo, tag). Shared by the source
+# signature AND the patches-list lookup so both always read the *same* release
+# object for a given repo, and so each repo's release endpoint is hit at most
+# once per run (rate-limit friendly).
+_github_release_cache: Dict[Tuple[str, str, str], Optional[dict]] = {}
+
 
 def fetch_repo_signature(user: str, repo: str, tag: str, provider: str = "github") -> str:
     """Get a stable identifier for the current state of a repo's release.
@@ -234,7 +240,26 @@ def _fetch_default_branch_sha(user: str, repo: str) -> str:
     return ""
 
 
-def _fetch_github_signature(user: str, repo: str, tag: str) -> str:
+def _fetch_github_release_dict(user: str, repo: str, tag: str) -> Optional[dict]:
+    """Resolve a GitHub repo's release object for the given tag, caching it.
+
+    This is the single authoritative release resolver for the planner. It is
+    intentionally BROAD so we never miss a rebuild signal:
+
+      - tag == "latest"      -> /releases/latest (falls back to most-recent list)
+      - tag in ("","dev","prerelease") -> /releases list, filtered accordingly
+      - any other tag        -> /releases/tags/<tag>
+      - no release at all    -> None (caller can still use commit-SHA via the
+                                signature path)
+
+    `fetch_repo_signature` and `fetch_recommended_version` both go through here,
+    so the signature and the recommended-version probe can never disagree about
+    which release a repo is on.
+    """
+    key = (user, repo, tag)
+    if key in _github_release_cache:
+        return _github_release_cache[key]
+
     if tag == "latest":
         api = f"repos/{user}/{repo}/releases/latest"
     elif tag in ("", "dev", "prerelease"):
@@ -248,19 +273,19 @@ def _fetch_github_signature(user: str, repo: str, tag: str) -> str:
         # back to the list endpoint and pick the most recent release of any kind.
         if tag == "latest":
             list_api = f"repos/{user}/{repo}/releases?per_page=10"
-            rc2, out2, err2 = run_gh(["api", list_api])
+            rc2, out2, _ = run_gh(["api", list_api])
             if rc2 == 0:
-                rc, out, err = rc2, out2, err2
+                rc, out, err = rc2, out2, _
                 api = list_api
         if rc != 0:
-            # No release info at all (repo publishes via commits/tags only).
-            # Fall back to a commit-SHA-only signature so we still detect changes.
-            sha = _fetch_default_branch_sha(user, repo)
-            if sha:
-                return f"@|sha:{sha}"
-            raise RuntimeError(f"gh api {api} failed: {err.strip()[:80]}")
+            _github_release_cache[key] = None
+            return None
 
-    data = json.loads(out)
+    try:
+        data = json.loads(out)
+    except Exception:
+        _github_release_cache[key] = None
+        return None
 
     if isinstance(data, list):
         if tag == "dev":
@@ -268,14 +293,30 @@ def _fetch_github_signature(user: str, repo: str, tag: str) -> str:
         elif tag == "prerelease":
             data = [r for r in data if r.get("prerelease")]
         if not data:
-            # No releases of the requested kind; use commit SHA so the signature
-            # still moves when upstream changes instead of freezing forever.
-            sha = _fetch_default_branch_sha(user, repo)
-            return f"@|sha:{sha}" if sha else f"@|none"
+            _github_release_cache[key] = None
+            return None
         data.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         rel = data[0]
     else:
         rel = data
+
+    _github_release_cache[key] = rel
+    return rel
+
+
+def _fetch_github_signature(user: str, repo: str, tag: str) -> str:
+    # Resolve through the shared cache so the signature and the
+    # recommended-version probe always read the same release object.
+    rel = _fetch_github_release_dict(user, repo, tag)
+    if not rel:
+        # No release of the requested kind (or no releases at all). Fall back to
+        # a commit-SHA-only signature so we still detect upstream changes rather
+        # than freezing the signature forever. This is the BROAD path: commits,
+        # tags, and pre-releases with no Release object all flip the SHA.
+        sha = _fetch_default_branch_sha(user, repo)
+        if sha:
+            return f"@|sha:{sha}"
+        raise RuntimeError(f"no release and no default-branch sha for {user}/{repo}/{tag}")
 
     tag_name = rel.get("tag_name") or rel.get("name") or "?"
     published = rel.get("published_at") or rel.get("created_at") or "?"
@@ -459,6 +500,150 @@ def get_source_signature(source: str) -> str:
     sig = ";".join(parts) if parts else f"empty:{source}"
     _source_sig_cache[source] = sig
     return sig
+
+
+# ---------------------------------------------------------------------------
+# Recommended version: what the builder will actually ship
+# ---------------------------------------------------------------------------
+_recommended_version_cache: Dict[Tuple[str, str], str] = {}
+
+
+def _download_release_asset_json(asset_url: str) -> Optional[dict]:
+    """Fetch a patch-list asset URL and parse it as JSON. Best-effort."""
+    try:
+        # provider_utils.session is the same requests.Session the rest of the
+        # planner uses for JSON fetches (gitlab/codeberg/bundle).
+        resp = provider_utils.session.get(asset_url, timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logging.info(f"  patch-list asset download/parse failed for {asset_url}: {e}")
+        return None
+
+
+def _pick_recommended_target(patches_json: dict, package_name: str) -> str:
+    """Given a parsed patches-list.json and a package, return the highest
+    non-experimental supported version (i.e. the one the builder ships).
+
+    The upstream patches-list.json marks each compatiblePackages[].targets[]
+    entry with ``isExperimental``. The builder (via the Morphe/ReVanced CLI
+    `list-versions`, which is derived from this same data) picks the highest
+    target, preferring the *recommended* (isExperimental == false) one. We mirror
+    that exactly here so the planner's notion of "the current target version"
+    matches what the build job will actually emit.
+
+    If no non-experimental target exists we fall back to the highest target of
+    any kind (some packages only have experimental targets) and finally to ''.
+    """
+    patches = patches_json.get("patches") if isinstance(patches_json, dict) else None
+    if not isinstance(patches, list):
+        return ""
+
+    stable: List[str] = []
+    any_kind: List[str] = []
+
+    for patch in patches:
+        if not isinstance(patch, dict):
+            continue
+        for pkg in patch.get("compatiblePackages") or []:
+            if not isinstance(pkg, dict):
+                continue
+            if (pkg.get("packageName") or "") != package_name:
+                continue
+            for tgt in pkg.get("targets") or []:
+                if not isinstance(tgt, dict):
+                    continue
+                ver = (tgt.get("version") or "").strip()
+                if not ver:
+                    continue
+                any_kind.append(ver)
+                if tgt.get("isExperimental") is False:
+                    stable.append(ver)
+
+    if stable:
+        return provider_utils.get_highest_version(stable) or ""
+    if any_kind:
+        return provider_utils.get_highest_version(any_kind) or ""
+    return ""
+
+
+def fetch_recommended_version(app_name: str, source: str) -> str:
+    """Return the version the builder is expected to ship for (app, source),
+    derived from the patch set's patches-list (highest isExperimental:false
+    target for the app's package).
+
+    This is the planner-side mirror of the builder's `get_supported_versions` ->
+    CLI `list-versions` selection. Comparing against THIS (not the store's newest
+    version) keeps planner and builder in agreement, so we never trigger a
+    rebuild whose result is identical to the APK already shipped.
+
+    Best-effort: returns '' on any failure (no patches-list asset, parse error,
+    non-github source, etc.). In that case the caller falls back to the legacy
+    store-latest probe so we don't regress detection.
+    """
+    ckey = (app_name, source)
+    if ckey in _recommended_version_cache:
+        return _recommended_version_cache[ckey]
+
+    resolved = ""
+
+    config, _platform = load_app_config(app_name)
+    package = (config or {}).get("package") or ""
+
+    src_file = SOURCES_DIR / f"{source}.json"
+    if not src_file.exists():
+        for f in SOURCES_DIR.glob("*.json"):
+            if f.stem.lower() == source.lower():
+                src_file = f
+                break
+
+    # Only github sources expose a downloadable patches-list asset we can parse
+    # here. Bundle sources already get a content-based signature; their
+    # recommended version is whatever the bundle pins, so we leave them to the
+    # store-latest fallback. GitLab/Codeberg likewise fall through.
+    if package and src_file.exists():
+        try:
+            with src_file.open("r", encoding="utf-8") as f:
+                src_data = json.load(f)
+        except Exception:
+            src_data = None
+
+        if isinstance(src_data, list):
+            for entry in src_data:
+                if not isinstance(entry, dict):
+                    continue
+                if (entry.get("provider") or "github").lower() != "github":
+                    continue
+                user = entry.get("user")
+                repo = entry.get("repo")
+                if not (user and repo):
+                    continue
+                # Reuse the SAME cached release the signature uses -> one API
+                # call per repo, and signature/version never disagree.
+                rel = _fetch_github_release_dict(user, repo, entry.get("tag", "latest"))
+                if not rel:
+                    continue
+                # The patches asset: .json (human/machine list) or .mpp/.jar.
+                # We only parse the .json form; .mpp/.jar are opaque here.
+                patch_asset_url = ""
+                for a in rel.get("assets") or []:
+                    if not isinstance(a, dict):
+                        continue
+                    name = (a.get("name") or "").lower()
+                    if name.endswith(".json") and ("patch" in name or "list" in name):
+                        patch_asset_url = a.get("browser_download_url") or ""
+                        break
+                if not patch_asset_url:
+                    continue
+                pj = _download_release_asset_json(patch_asset_url)
+                if pj is None:
+                    continue
+                resolved = _pick_recommended_target(pj, package)
+                if resolved:
+                    break
+
+    _recommended_version_cache[ckey] = resolved
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -668,13 +853,28 @@ def plan_incremental(full_matrix: List[dict], old_manifest: Optional[dict],
             # config version). When config_version is empty, the config_version
             # compare above can never fire, so without this check a brand-new
             # upstream release would be invisible to the planner and the stale
-            # APK would be carried forever. Compare the version we last built
-            # against the version the store is publishing right now.
+            # APK would be carried forever.
+            #
+            # The PRIMARY signal is the version the builder will actually ship:
+            # the highest isExperimental:false target in the patch set's
+            # patches-list (fetch_recommended_version). This mirrors the
+            # builder's `list-versions` selection exactly, so the planner can
+            # only ever flag a rebuild whose result would differ from the APK
+            # already shipped. We compare THAT against built_version.
+            #
+            # If the recommended probe comes back empty (non-github source, no
+            # parseable patches-list asset, network error), we fall back to the
+            # store's newest published version so we still detect a new upstream
+            # app release instead of regressing to no-detection.
             if not cur_app_ver and old_built_ver:
-                latest_store_ver = fetch_latest_app_version(app)
-                if latest_store_ver and _is_newer_version(latest_store_ver, old_built_ver):
+                target_ver = fetch_recommended_version(app, src)
+                probe_kind = "patch"
+                if not target_ver:
+                    target_ver = fetch_latest_app_version(app)
+                    probe_kind = "store"
+                if target_ver and _is_newer_version(target_ver, old_built_ver):
                     reasons.append(
-                        f"new-version: built {old_built_ver!r} -> store {latest_store_ver!r}"
+                        f"new-version: built {old_built_ver!r} -> {probe_kind} {target_ver!r}"
                     )
             old_apk = carried_apk
             if old_apk and old_apk not in existing_apk_set:
