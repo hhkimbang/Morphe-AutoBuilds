@@ -15,9 +15,56 @@ Flow:
 import asyncio
 import logging
 
+import os
+import shutil
+import subprocess
+
 # Module-level cookie cache: once solved, reuse for every request.
 _cf_cookie_cache: dict = {}
 _solve_attempted: bool = False
+
+
+def find_working_chrome() -> str | None:
+    """Finds a native, working Google Chrome/Chromium binary, skipping snap packages
+    that fail in headless container/CI environments."""
+    candidates = [
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+        "google-chrome-stable",
+        "google-chrome",
+        "chromium-browser",
+        "chromium",
+    ]
+
+    found_paths = []
+    for candidate in candidates:
+        path = shutil.which(candidate) or (candidate if os.path.exists(candidate) else None)
+        if path and path not in found_paths:
+            found_paths.append(path)
+
+    logging.info(f"Detected browser candidates: {found_paths}")
+
+    for path in found_paths:
+        try:
+            if "snap" in path:
+                logging.info(f"Skipping snap candidate: {path}")
+                continue
+            
+            res = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                logging.info(f"Selected working browser: {path} ({res.stdout.strip()})")
+                return path
+            else:
+                logging.warning(f"Browser at {path} failed with exit code {res.returncode}: {res.stderr.strip()}")
+        except Exception as e:
+            logging.warning(f"Failed to execute browser test for {path}: {e}")
+
+    if found_paths:
+        logging.warning(f"No candidates passed execution tests. Falling back to first found: {found_paths[0]}")
+        return found_paths[0]
+    return None
 
 
 async def _solve_challenge_async(url: str, timeout: int = 30) -> dict:
@@ -28,7 +75,13 @@ async def _solve_challenge_async(url: str, timeout: int = 30) -> dict:
     cookies: dict = {}
     browser = None
     try:
-        browser = await uc.start(headless=True, sandbox=False)
+        chrome_path = find_working_chrome()
+        browser = await uc.start(
+            browser_executable_path=chrome_path,
+            headless=True,
+            sandbox=False,
+            browser_args=["--disable-gpu"]
+        )
         page = await browser.get(url)
 
         # Poll until Cloudflare clears (title changes from "Just a moment...")
