@@ -102,6 +102,7 @@ async def _solve_challenge_async(url: str, timeout: int = 30) -> dict:
 
         # Poll until Cloudflare clears (title doesn't contain challenge indicators)
         elapsed = 0
+        last_click_time = 0
         while elapsed < timeout:
             await asyncio.sleep(0.5)
             elapsed += 0.5
@@ -114,6 +115,26 @@ async def _solve_challenge_async(url: str, timeout: int = 30) -> dict:
             if title_lower and not any(term in title_lower for term in ["just a moment", "attention required", "cloudflare", "turnstile"]):
                 logging.info(f"Cloudflare cleared after {elapsed:.1f}s — title: {title}")
                 break
+
+            # If inside challenge, search for and click Turnstile checkbox
+            if any(term in title_lower for term in ["attention required", "just a moment", "cloudflare"]):
+                if elapsed - last_click_time >= 4.0:
+                    try:
+                        iframes = await page.select_all("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile'], iframe[title*='Cloudflare']")
+                        if iframes:
+                            for iframe in iframes:
+                                pos = await iframe.get_position()
+                                click_x = pos.left + 35
+                                click_y = pos.top + (pos.height / 2)
+                                logging.info(
+                                    f"Detected Turnstile challenge. Simulating mouse click at ({click_x:.1f}, {click_y:.1f}) "
+                                    f"inside iframe at (L:{pos.left:.1f}, T:{pos.top:.1f}, W:{pos.width:.1f}, H:{pos.height:.1f})"
+                                )
+                                await page.mouse_click(click_x, click_y)
+                                last_click_time = elapsed
+                                break
+                    except Exception as click_err:
+                        logging.debug(f"Turnstile click attempt failed: {click_err}")
         else:
             logging.warning(f"Cloudflare did not clear within {timeout}s")
 
