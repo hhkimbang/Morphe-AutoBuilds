@@ -248,6 +248,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                     morphe_cmd = [
                         "java", "-jar", str(cli),
                         "patch", "--patches", str(patches),
+                        "--striplibs", "arm64-v8a",
                         "--out", str(output_apk), str(input_apk),
                         *exclude_patches, *include_patches
                     ]
@@ -261,6 +262,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                     morphe_cmd = [
                         "java", "-jar", str(cli),
                         "--patches", str(patches),
+                        "--striplibs", "arm64-v8a",
                         "--input", str(input_apk),
                         "--output", str(output_apk)
                     ]

@@ -1,1 +1,8 @@
 -AddResourcesPatch
+-Custom branding
+-Enable debugging
+-Custom branding
+-Network proxy
+-Change header
+-Scrobbling
+-Permanent repeat
