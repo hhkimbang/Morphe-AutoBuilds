@@ -5,21 +5,14 @@
     { "app_name": "youtube-music", "source": "morphe" },
     { "app_name": "reddit", "source": "morphe" },
     { "app_name": "instagram", "source": "piko" },
-    { "app_name": "pinterest", "source": "adobo" },
-    { "app_name": "niagara", "source": "Hoo" },
     { "app_name": "disney-plus", "source": "rookie" },
     { "app_name": "photomath", "source": "rookie" },
     { "app_name": "pixiv", "source": "rookie" },
-    { "app_name": "proton-vpn", "source": "rushiranpise" },
     { "app_name": "icon-packer", "source": "Hoo" },
-    { "app_name": "tumblr", "source": "rookie" },
     { "app_name": "threads", "source": "rookie"},
     { "app_name": "tasker", "source": "dropped" },
     { "app_name": "icon-pack-studio", "source": "rookie" },
     { "app_name": "ttmik-stories", "source": "Hoo" },
-    { "app_name": "windy", "source": "Hoo" },
-    { "app_name": "telegram", "source": "paresh" },
-    { "app_name": "smart_launcher", "source": "Hoo" }
-    
+    { "app_name": "telegram", "source": "paresh" }
   ]
 }
