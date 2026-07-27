@@ -206,8 +206,8 @@ def download_platform(
         if not config or not config.get("package"):
             raise FileNotFoundError(f"Config file not found for {app_name} on {platform}")
         
-        # Override arch only if explicitly specified non-universal, or if config has no arch set
-        if arch and arch != "universal":
+        # Override arch if specified
+        if not config['arch']:
             config['arch'] = arch
         elif 'arch' not in config or not config['arch']:
             config['arch'] = arch or "universal"
