@@ -1,0 +1,6 @@
+-AddResourcesPatch
+-Network proxy
+-Enable debugging
+-Return YouTube Dislike
+-Custom player overlay opacity
+-Custom branding

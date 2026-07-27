@@ -1,0 +1,2 @@
+-AddResourcesPatch
+-Custom branding name for Reddit
