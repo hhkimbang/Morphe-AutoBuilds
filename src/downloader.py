@@ -142,7 +142,7 @@ def download_platform(
             config = json.load(json_file)
         
         # Override arch if specified
-        if arch:
+        if not config['arch']:
             config['arch'] = arch
 
         platform_module = globals()[platform]
